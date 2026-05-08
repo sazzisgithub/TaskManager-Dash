@@ -1,0 +1,1369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaskFlow — Team Task Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     AUTH PAGE  (/api/auth/signup/  /api/auth/login/)
+═══════════════════════════════════════════════════════ -->
+<div id="auth" class="auth-wrapper" style="display:none">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="logo-icon">⚡</div>
+      <h1>TaskFlow</h1>
+      <p>Manage projects. Ship faster.</p>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login">Sign In</button>
+      <button class="auth-tab"        data-tab="signup">Create Account</button>
+    </div>
+
+    <!-- Login -->
+    <div id="login-form">
+      <div class="form-group">
+        <label>Email</label>
+        <input id="login-email" class="form-control" type="email" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input id="login-pass" class="form-control" type="password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <button id="login-btn" class="btn btn-primary btn-full" style="margin-top:8px">Sign In</button>
+    </div>
+
+    <!-- Signup -->
+    <div id="signup-form" style="display:none">
+      <div class="form-group">
+        <label>First Name</label>
+        <input id="signup-name" class="form-control" type="text" placeholder="Your name" autocomplete="given-name" />
+      </div>
+      <div class="form-group">
+        <label>Last Name <span style="color:var(--text3)">(optional)</span></label>
+        <input id="signup-lastname" class="form-control" type="text" placeholder="Last name" autocomplete="family-name" />
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input id="signup-email" class="form-control" type="email" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="form-group">
+        <label>Password <span style="color:var(--text3)">(min 6 chars)</span></label>
+        <input id="signup-pass" class="form-control" type="password" placeholder="Create a password" autocomplete="new-password" />
+      </div>
+      <button id="signup-btn" class="btn btn-primary btn-full" style="margin-top:8px">Create Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MAIN APP SHELL
+═══════════════════════════════════════════════════════ -->
+<div id="app" style="display:none">
+  <div class="layout">
+
+    <!-- ── SIDEBAR ── -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">⚡</div>
+        <span>TaskFlow</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-label">Main</div>
+          <button class="nav-item active" data-page="dashboard">
+            <span class="nav-icon">🏠</span> Dashboard
+          </button>
+          <button class="nav-item" data-page="projects">
+            <span class="nav-icon">📁</span> Projects
+          </button>
+          <button class="nav-item" data-page="my-tasks">
+            <span class="nav-icon">✅</span> My Tasks
+            <span class="nav-badge" id="my-tasks-badge" style="display:none">0</span>
+          </button>
+        </div>
+
+        <!-- Admin-only section, shown after login if role=admin -->
+        <div class="nav-section" id="admin-section" style="display:none">
+          <div class="nav-label">Admin</div>
+          <button class="nav-item" data-page="team">
+            <span class="nav-icon">👥</span> Team
+          </button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <!-- User card -->
+        <div id="sidebar-user-card" class="user-card">
+          <div class="avatar" id="sb-avatar">?</div>
+          <div class="user-info">
+            <div class="user-name" id="sb-name">—</div>
+            <div class="user-role" id="sb-role">—</div>
+          </div>
+        </div>
+        <button class="nav-item" id="logout-btn" style="margin-top:6px;color:var(--danger)">
+          <span class="nav-icon">🚪</span> Logout
+        </button>
+      </div>
+    </aside>
+
+    <!-- ── MAIN CONTENT ── -->
+    <div class="main">
+
+      <!-- Top bar -->
+      <div class="topbar">
+        <span class="topbar-title" id="topbar-title">Dashboard</span>
+        <div class="topbar-actions" id="topbar-actions"></div>
+      </div>
+
+      <!-- Pages -->
+      <div id="page-dashboard"      class="page"></div>
+      <div id="page-projects"       class="page page-hidden"></div>
+      <div id="page-project-detail" class="page page-hidden"></div>
+      <div id="page-my-tasks"       class="page page-hidden"></div>
+      <div id="page-team"           class="page page-hidden"></div>
+
+    </div><!-- /.main -->
+  </div><!-- /.layout -->
+</div><!-- /#app -->
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SCRIPTS — order matters
+═══════════════════════════════════════════════════════ -->
+<script>
+/* ══════════════════════════════════════════════════════════
+   api.js — all calls to Django REST backend
+   Base: /api/auth/  /api/project/  /api/tasks/
+══════════════════════════════════════════════════════════ */
+const API_BASE = 'https://taskmanager-dash-1.onrender.com/api';
+
+const api = {
+  token: null,
+
+  setToken(t)   { this.token = t; localStorage.setItem('tf_token', t); },
+  clearToken()  { this.token = null; localStorage.removeItem('tf_token'); localStorage.removeItem('tf_user'); },
+  loadToken()   { this.token = localStorage.getItem('tf_token'); },
+
+  async request(method, path, body = null) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    const opts = { method, headers };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(`${API_BASE}${path}`, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw { status: res.status, data };
+    return data;
+  },
+
+  get:    (path)        => api.request('GET',    path),
+  post:   (path, body)  => api.request('POST',   path, body),
+  put:    (path, body)  => api.request('PUT',    path, body),
+  patch:  (path, body)  => api.request('PATCH',  path, body),
+  delete: (path)        => api.request('DELETE', path),
+
+  // ── Auth  (/api/auth/)
+  signup:  (d) => api.post('/auth/signup/', d),
+  login:   (d) => api.post('/auth/login/', d),
+  me:      ()  => api.get('/auth/me/'),
+  users:   ()  => api.get('/auth/users/'),
+
+  // ── Projects  (/api/project/)
+  projects:       ()        => api.get('/project/'),
+  project:        (id)      => api.get(`/project/${id}/`),
+  createProject:  (d)       => api.post('/project/', d),
+  updateProject:  (id, d)   => api.patch(`/project/${id}/`, d),
+  deleteProject:  (id)      => api.delete(`/project/${id}/`),
+  projectMembers: (id)      => api.get(`/project/${id}/members/`),
+  addMember:      (id, d)   => api.post(`/project/${id}/add_member/`, d),
+  removeMember:   (pid,uid) => api.delete(`/project/${pid}/remove_member/${uid}/`),
+
+  // ── Tasks  (/api/tasks/)
+  tasks:          (q = '')  => api.get(`/tasks/${q}`),
+  task:           (id)      => api.get(`/tasks/${id}/`),
+  createTask:     (d)       => api.post('/tasks/', d),
+  updateTask:     (id, d)   => api.patch(`/tasks/${id}/`, d),
+  updateTaskStatus:(id,s)   => api.patch(`/tasks/${id}/status/`, { status: s }),
+  deleteTask:     (id)      => api.delete(`/tasks/${id}/`),
+  addComment:     (id, c)   => api.post(`/tasks/${id}/comment/`, { comment: c }),
+  dashboard:      ()        => api.get('/tasks/dashboard/'),
+};
+
+/* ══════════════════════════════════════════════════════════
+   utils.js
+══════════════════════════════════════════════════════════ */
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  const icons = { success:'✓', error:'✕', warn:'⚠', info:'ℹ' };
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span>${icons[type]||'ℹ'}</span><span>${msg}</span>`;
+  c.appendChild(t);
+  setTimeout(() => {
+    t.style.opacity = '0'; t.style.transform = 'translateX(100%)'; t.style.transition = '0.3s';
+    setTimeout(() => t.remove(), 300);
+  }, 3500);
+}
+
+function openModal(html, onClose) {
+  closeModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay'; overlay.id = 'active-modal';
+  overlay.innerHTML = html;
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  document.body.appendChild(overlay);
+  if (onClose) overlay._onClose = onClose;
+}
+function closeModal() {
+  const m = document.getElementById('active-modal');
+  if (m) { if (m._onClose) m._onClose(); m.remove(); }
+}
+
+function statusBadge(s) {
+  const labels = { todo:'To Do', in_progress:'In Progress', review:'Review', done:'Done' };
+  return `<span class="badge badge-${s}">${labels[s]||s}</span>`;
+}
+function priorityBadge(p) {
+  return `<span class="badge badge-${p}">${p}</span>`;
+}
+function statusDotColor(s) {
+  return { todo:'#6c63ff', in_progress:'#ffaa00', review:'#00b4d8', done:'#00d68f' }[s] || '#6c63ff';
+}
+
+function avatar(user, cls='') {
+  if (!user) return `<div class="avatar ${cls}">?</div>`;
+  const init = ((user.first_name||user.email||'?')[0]).toUpperCase();
+  return `<div class="avatar ${cls}">${init}</div>`;
+}
+function miniAvatar(user) {
+  if (!user) return '';
+  const init = ((user.first_name||user.email||'?')[0]).toUpperCase();
+  return `<div class="mini-avatar" title="${userName(user)}">${init}</div>`;
+}
+function userName(user) {
+  if (!user) return 'Unassigned';
+  return [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email;
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+}
+function isOverdue(task) {
+  return task.is_overdue || (task.due_date && task.status !== 'done' && new Date(task.due_date) < new Date());
+}
+function timeAgo(dt) {
+  const diff = (Date.now() - new Date(dt)) / 1000;
+  if (diff < 60)    return 'just now';
+  if (diff < 3600)  return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function emptyState(icon, title, msg) {
+  return `<div class="empty-state"><div class="empty-icon">${icon}</div><h3>${title}</h3><p>${msg}</p></div>`;
+}
+function loadingEl() {
+  return `<div class="loading-screen" style="display:flex;align-items:center;justify-content:center;min-height:200px"><div class="spinner"></div></div>`;
+}
+
+async function withLoading(btn, fn) {
+  const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<div class="spinner"></div>`;
+  try { await fn(); }
+  catch(e) {
+    const msg = e?.data?.error || e?.data?.detail ||
+      (Object.values(e?.data||{}).flat())[0] || 'Something went wrong';
+    toast(msg, 'error');
+  } finally { btn.disabled = false; btn.innerHTML = orig; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   auth.js
+══════════════════════════════════════════════════════════ */
+let currentUser = null;
+let allUsers    = [];
+
+function getUser()    { return currentUser; }
+function isAdmin()    { return currentUser?.role === 'admin'; }
+
+function initAuth() {
+  api.loadToken();
+  const s = localStorage.getItem('tf_user');
+  if (s) { try { currentUser = JSON.parse(s); } catch(_) {} }
+}
+
+async function checkAuth() {
+  if (!api.token) return false;
+  try {
+    const data = await api.me();
+    currentUser = data.user;
+    localStorage.setItem('tf_user', JSON.stringify(currentUser));
+    return true;
+  } catch(_) {
+    api.clearToken(); currentUser = null; return false;
+  }
+}
+
+function renderAuthPage() {
+  document.getElementById('auth').style.display = 'flex';
+  document.getElementById('app').style.display  = 'none';
+
+  const tabs = document.querySelectorAll('.auth-tab');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active')); t.classList.add('active');
+    const mode = t.dataset.tab;
+    document.getElementById('login-form').style.display  = mode === 'login'  ? 'block' : 'none';
+    document.getElementById('signup-form').style.display = mode === 'signup' ? 'block' : 'none';
+  }));
+
+  document.getElementById('login-btn').addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const email    = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-pass').value;
+      if (!email || !password) throw { data:{ error:'Please fill all fields' } };
+      const data = await api.login({ email, password });
+      api.setToken(data.token);
+      currentUser = data.user;
+      localStorage.setItem('tf_user', JSON.stringify(currentUser));
+      toast('Welcome back, ' + (data.user.first_name || data.user.email) + '!', 'success');
+      launchApp();
+    });
+  });
+
+  document.getElementById('signup-btn').addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const first_name = document.getElementById('signup-name').value.trim();
+      const last_name  = document.getElementById('signup-lastname').value.trim();
+      const email      = document.getElementById('signup-email').value.trim();
+      const password   = document.getElementById('signup-pass').value;
+      if (!first_name || !email || !password) throw { data:{ error:'Please fill all required fields' } };
+      if (password.length < 6) throw { data:{ error:'Password must be at least 6 characters' } };
+      const body = { first_name, email, password };
+      if (last_name) body.last_name = last_name;
+      const data = await api.signup(body);
+      api.setToken(data.token);
+      currentUser = data.user;
+      localStorage.setItem('tf_user', JSON.stringify(currentUser));
+      toast('Account created! Welcome to TaskFlow 🎉', 'success');
+      launchApp();
+    });
+  });
+}
+
+function logout() {
+  api.clearToken(); currentUser = null; allUsers = [];
+  document.getElementById('app').style.display  = 'none';
+  document.getElementById('auth').style.display = 'flex';
+  // reset forms
+  ['login-email','login-pass','signup-name','signup-lastname','signup-email','signup-pass']
+    .forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+}
+
+/* ══════════════════════════════════════════════════════════
+   NAVIGATION
+══════════════════════════════════════════════════════════ */
+const PAGE_TITLES = {
+  'dashboard':      'Dashboard',
+  'projects':       'Projects',
+  'project-detail': 'Project',
+  'my-tasks':       'My Tasks',
+  'team':           'Team',
+};
+
+function navigate(page) {
+  ['dashboard','projects','project-detail','my-tasks','team'].forEach(p => {
+    const el = document.getElementById(`page-${p}`);
+    if (el) el.classList.toggle('page-hidden', p !== page);
+  });
+  document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.page === page);
+  });
+  document.getElementById('topbar-title').textContent = PAGE_TITLES[page] || page;
+  // topbar actions
+  const ta = document.getElementById('topbar-actions');
+  ta.innerHTML = '';
+  if (page === 'projects') {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-sm';
+    btn.textContent = '+ New Project';
+    btn.addEventListener('click', showCreateProjectModal);
+    ta.appendChild(btn);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════
+   SIDEBAR USER CARD
+══════════════════════════════════════════════════════════ */
+function updateSidebarUser() {
+  const u = getUser();
+  if (!u) return;
+  document.getElementById('sb-avatar').textContent = (u.first_name||u.email||'?')[0].toUpperCase();
+  document.getElementById('sb-name').textContent   = userName(u);
+  document.getElementById('sb-role').textContent   = u.role;
+  if (isAdmin()) document.getElementById('admin-section').style.display = 'block';
+}
+
+/* ══════════════════════════════════════════════════════════
+   dashboard.js
+══════════════════════════════════════════════════════════ */
+async function renderDashboard() {
+  const page = document.getElementById('page-dashboard');
+  page.innerHTML = loadingEl();
+  try {
+    const data = await api.dashboard();
+    const { stats, recent_tasks, overdue_tasks, my_tasks } = data;
+
+    const statCards = [
+      { label:'Total Tasks',  num:stats.total_tasks,  icon:'📋', color:'#6c63ff' },
+      { label:'In Progress',  num:stats.in_progress,  icon:'⚡', color:'#ffaa00' },
+      { label:'In Review',    num:stats.review,        icon:'👀', color:'#00b4d8' },
+      { label:'Completed',    num:stats.done,          icon:'✅', color:'#00d68f' },
+      { label:'Overdue',      num:stats.overdue,       icon:'🔥', color:'#ff4757' },
+      { label:'My Tasks',     num:stats.my_tasks,      icon:'👤', color:'#a78bfa' },
+    ];
+
+    page.innerHTML = `
+      <div class="stats-grid">
+        ${statCards.map(s => `
+          <div class="stat-card" style="--c:${s.color}">
+            <div class="stat-num">${s.num}</div>
+            <div class="stat-label">${s.label}</div>
+            <div class="stat-icon">${s.icon}</div>
+          </div>`).join('')}
+      </div>
+      <div class="dash-grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🔥 Overdue Tasks</span>
+            <span class="badge badge-urgent">${overdue_tasks.length}</span>
+          </div>
+          ${overdue_tasks.length === 0
+            ? emptyState('🎉','No overdue tasks','You\'re all caught up!')
+            : `<div class="task-list">${overdue_tasks.map(t => taskItemHtml(t)).join('')}</div>`}
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">👤 My Tasks</span>
+            <span class="badge badge-todo">${my_tasks.length}</span>
+          </div>
+          ${my_tasks.length === 0
+            ? emptyState('👌','No open tasks','Assign some tasks to yourself!')
+            : `<div class="task-list">${my_tasks.map(t => taskItemHtml(t)).join('')}</div>`}
+        </div>
+      </div>
+      <div class="card" style="margin-top:20px">
+        <div class="card-header">
+          <span class="card-title">🕒 Recently Updated</span>
+        </div>
+        ${recent_tasks.length === 0
+          ? emptyState('📭','No tasks yet','Create a project and add tasks!')
+          : `<div class="task-list">${recent_tasks.map(t => taskItemHtml(t, true)).join('')}</div>`}
+      </div>
+    `;
+
+    page.querySelectorAll('.task-item[data-id]').forEach(el => {
+      el.addEventListener('click', () => openTaskDetail(el.dataset.id));
+    });
+
+    // update my-tasks badge
+    updateMyTasksBadge(stats.my_tasks);
+  } catch(e) {
+    page.innerHTML = emptyState('⚠️','Failed to load dashboard', e?.data?.detail||'Check your connection');
+  }
+}
+
+function taskItemHtml(t, showProject = false) {
+  const overdueHtml  = isOverdue(t) ? `<span class="overdue-tag">Overdue</span>` : '';
+  const dueHtml      = t.due_date   ? `<span style="font-size:11px;color:var(--text3)">${fmtDate(t.due_date)}</span>` : '';
+  const projHtml     = (showProject && t.project_name)
+                       ? `<span style="font-size:11px;color:var(--text3)">${t.project_name}</span>` : '';
+  return `
+    <div class="task-item" data-id="${t.id}">
+      <div class="task-status-dot" style="background:${statusDotColor(t.status)}"></div>
+      <div class="task-item-title">${t.title}</div>
+      <div class="task-item-meta">
+        ${overdueHtml}${projHtml}${dueHtml}
+        ${priorityBadge(t.priority)}
+        ${statusBadge(t.status)}
+      </div>
+    </div>`;
+}
+
+function updateMyTasksBadge(count) {
+  const b = document.getElementById('my-tasks-badge');
+  if (!b) return;
+  if (count > 0) { b.textContent = count; b.style.display = 'inline-block'; }
+  else { b.style.display = 'none'; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   projects.js — listing, project detail, kanban, members
+══════════════════════════════════════════════════════════ */
+let currentProject    = null;
+let currentProjectTab = 'tasks';
+let taskView          = 'list';
+let taskFilters       = { status:'', priority:'', assignee:'', search:'' };
+
+async function renderProjects() {
+  const page = document.getElementById('page-projects');
+  page.innerHTML = loadingEl();
+  try {
+    const [projRes, usersRes] = await Promise.all([api.projects(), api.users()]);
+    // DRF returns array or {results:[...]}
+    const projects = Array.isArray(projRes) ? projRes : (projRes.results || []);
+    allUsers = usersRes.users || usersRes || [];
+
+    page.innerHTML = `
+      <div class="filters" style="justify-content:space-between;flex-wrap:wrap">
+        <input class="search-input" id="proj-search" placeholder="🔍 Search projects…">
+      </div>
+      <div id="projects-grid" class="projects-grid"></div>
+    `;
+    renderProjectCards(projects);
+
+    document.getElementById('proj-search').addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      renderProjectCards(projects.filter(p =>
+        p.name.toLowerCase().includes(q) || (p.description||'').toLowerCase().includes(q)
+      ));
+    });
+  } catch(e) {
+    page.innerHTML = emptyState('⚠️','Failed to load', e?.data?.detail||'Try refreshing');
+  }
+}
+
+function renderProjectCards(projects) {
+  const grid = document.getElementById('projects-grid');
+  if (!grid) return;
+  if (projects.length === 0) {
+    grid.innerHTML = emptyState('📁','No projects yet','Create your first project to get started.');
+    return;
+  }
+  grid.innerHTML = projects.map(p => {
+    const progress = p.task_count > 0 ? Math.round((p.done_count / p.task_count) * 100) : 0;
+    return `
+      <div class="project-card" data-id="${p.id}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div class="project-card-name">${p.name}</div>
+          <span class="badge badge-${p.status}">${p.status}</span>
+        </div>
+        <div class="project-card-desc">${p.description||'<span style="color:var(--text3)">No description</span>'}</div>
+        <div class="project-progress"><div class="project-progress-bar" style="width:${progress}%"></div></div>
+        <div class="project-card-footer">
+          <div class="project-stats">
+            <span>👥 ${p.member_count}</span>
+            <span>📋 ${p.task_count} tasks</span>
+            <span>✅ ${progress}%</span>
+          </div>
+          <span style="font-size:11px;color:var(--text3)">${fmtDate(p.created_at)}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.project-card').forEach(el => {
+    el.addEventListener('click', () => openProjectDetail(el.dataset.id));
+  });
+}
+
+function showCreateProjectModal() {
+  openModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">New Project</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group"><label>Project Name *</label><input class="form-control" id="proj-name" placeholder="e.g. Website Redesign"></div>
+        <div class="form-group"><label>Description</label><textarea class="form-control" id="proj-desc" placeholder="What is this project about?"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="create-proj-btn">Create Project</button>
+      </div>
+    </div>`);
+
+  document.getElementById('create-proj-btn').addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const name = document.getElementById('proj-name').value.trim();
+      if (!name) throw { data:{ error:'Project name is required' } };
+      await api.createProject({ name, description: document.getElementById('proj-desc').value.trim() });
+      toast('Project created!', 'success');
+      closeModal();
+      renderProjects();
+    });
+  });
+}
+
+// ── Project Detail ──
+async function openProjectDetail(id) {
+  navigate('project-detail');
+  const page = document.getElementById('page-project-detail');
+  page.innerHTML = loadingEl();
+  currentProjectTab = 'tasks';
+  try {
+    const [projRes, usersRes] = await Promise.all([api.project(id), api.users()]);
+    // ProjectDetailSerializer returns object with nested members array
+    const project = projRes;
+    const members = projRes.members || await api.projectMembers(id);
+    allUsers = usersRes.users || usersRes || [];
+    currentProject = project;
+    renderProjectDetailPage(project, members);
+  } catch(e) {
+    page.innerHTML = emptyState('⚠️','Failed to load project', e?.data?.detail||'');
+  }
+}
+
+function renderProjectDetailPage(project, members) {
+  const page = document.getElementById('page-project-detail');
+  const user = getUser();
+  const myMembership = members.find(m => m.user.id === user.id);
+  const canManage    = isAdmin() || (myMembership && myMembership.role === 'admin');
+  const progress     = project.task_count > 0 ? Math.round((project.done_count / project.task_count) * 100) : 0;
+
+  document.getElementById('topbar-title').textContent = project.name;
+
+  page.innerHTML = `
+    <button class="back-btn" id="back-to-projects">← Back to Projects</button>
+    <div class="project-detail-header">
+      <div>
+        <h2 style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;margin-bottom:6px">${project.name}</h2>
+        <p style="color:var(--text2);font-size:13px">${project.description||'No description'}</p>
+        <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span class="badge badge-${project.status}">${project.status}</span>
+          <span style="font-size:12px;color:var(--text3)">Owner: ${project.owner?.first_name||project.owner?.email||'—'}</span>
+          <span style="font-size:12px;color:var(--text3)">Progress: ${progress}%</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${canManage ? `
+          <button class="btn btn-primary btn-sm" id="new-task-btn">+ Add Task</button>
+          <button class="btn btn-secondary btn-sm" id="edit-proj-btn">⚙ Edit</button>` : ''}
+      </div>
+    </div>
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="tasks">📋 Tasks (${project.task_count})</button>
+      <button class="tab-btn"        data-tab="members">👥 Members (${project.member_count})</button>
+    </div>
+    <div id="proj-tab-content"></div>
+  `;
+
+  document.getElementById('back-to-projects').addEventListener('click', () => {
+    navigate('projects'); renderProjects();
+  });
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentProjectTab = btn.dataset.tab;
+      renderProjectTab(project, members, canManage);
+    });
+  });
+  if (canManage) {
+    document.getElementById('new-task-btn')?.addEventListener('click', () => showCreateTaskModal(project.id));
+    document.getElementById('edit-proj-btn')?.addEventListener('click', () => showEditProjectModal(project));
+  }
+  renderProjectTab(project, members, canManage);
+}
+
+async function renderProjectTab(project, members, canManage) {
+  const content = document.getElementById('proj-tab-content');
+  if (currentProjectTab === 'members') renderMembersTab(content, project, members, canManage);
+  else await renderTasksTab(content, project, members, canManage);
+}
+
+async function renderTasksTab(content, project, members, canManage) {
+  content.innerHTML = `
+    <div class="filters">
+      <input class="search-input" id="task-search" placeholder="🔍 Search tasks…" value="${taskFilters.search}">
+      <select class="filter-select" id="filter-status">
+        <option value="">All Status</option>
+        <option value="todo">To Do</option>
+        <option value="in_progress">In Progress</option>
+        <option value="review">Review</option>
+        <option value="done">Done</option>
+      </select>
+      <select class="filter-select" id="filter-priority">
+        <option value="">All Priority</option>
+        <option value="urgent">Urgent</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <select class="filter-select" id="filter-assignee">
+        <option value="">All Assignees</option>
+        <option value="me">My Tasks</option>
+        ${members.map(m => `<option value="${m.user.id}">${userName(m.user)}</option>`).join('')}
+      </select>
+      <div class="view-toggle">
+        <button class="view-btn ${taskView==='list'?'active':''}"   data-view="list">☰ List</button>
+        <button class="view-btn ${taskView==='kanban'?'active':''}" data-view="kanban">⊞ Board</button>
+      </div>
+    </div>
+    <div id="tasks-container">${loadingEl()}</div>
+  `;
+
+  // restore filter selects
+  document.getElementById('filter-status').value   = taskFilters.status;
+  document.getElementById('filter-priority').value = taskFilters.priority;
+  document.getElementById('filter-assignee').value = taskFilters.assignee;
+
+  const loadTasks = async () => {
+    const params = new URLSearchParams({ project: project.id });
+    if (taskFilters.status)   params.append('status',   taskFilters.status);
+    if (taskFilters.priority) params.append('priority', taskFilters.priority);
+    if (taskFilters.assignee) params.append('assignee', taskFilters.assignee);
+    const res = await api.tasks(`?${params}`);
+    let tasks = Array.isArray(res) ? res : (res.results || Object.values(res).find(v => Array.isArray(v)) || []);
+    if (taskFilters.search) {
+      const q = taskFilters.search.toLowerCase();
+      tasks = tasks.filter(t => t.title.toLowerCase().includes(q));
+    }
+    renderTasks(tasks, canManage);
+  };
+
+  ['filter-status','filter-priority','filter-assignee'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', function() {
+      taskFilters[id.replace('filter-','')] = this.value; loadTasks();
+    });
+  });
+  document.getElementById('task-search')?.addEventListener('input', function() {
+    taskFilters.search = this.value; loadTasks();
+  });
+  document.querySelectorAll('.view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      taskView = btn.dataset.view;
+      document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadTasks();
+    });
+  });
+  await loadTasks();
+}
+
+function renderTasks(tasks, canManage) {
+  const container = document.getElementById('tasks-container');
+  if (!container) return;
+  if (tasks.length === 0) {
+    container.innerHTML = emptyState('📭','No tasks found','Create a task or adjust filters.'); return;
+  }
+  if (taskView === 'kanban') renderKanban(container, tasks);
+  else renderTaskList(container, tasks);
+}
+
+function renderTaskList(container, tasks) {
+  container.innerHTML = `<div class="task-list">${tasks.map(t => `
+    <div class="task-item" data-id="${t.id}">
+      <div class="task-status-dot" style="background:${statusDotColor(t.status)}"></div>
+      <div class="task-item-title">${t.title}</div>
+      <div class="task-item-meta">
+        ${isOverdue(t) ? '<span class="overdue-tag">Overdue</span>' : ''}
+        ${t.due_date ? `<span style="font-size:11px;color:var(--text3)">${fmtDate(t.due_date)}</span>` : ''}
+        ${t.assignee ? `<span style="font-size:12px;color:var(--text2)">${userName(t.assignee)}</span>` : '<span style="font-size:12px;color:var(--text3)">Unassigned</span>'}
+        ${priorityBadge(t.priority)} ${statusBadge(t.status)}
+      </div>
+    </div>`).join('')}</div>`;
+  container.querySelectorAll('.task-item').forEach(el => {
+    el.addEventListener('click', () => openTaskDetail(el.dataset.id));
+  });
+}
+
+function renderKanban(container, tasks) {
+  const cols = [
+    { key:'todo',        label:'To Do',       color:'#6c63ff' },
+    { key:'in_progress', label:'In Progress',  color:'#ffaa00' },
+    { key:'review',      label:'Review',       color:'#00b4d8' },
+    { key:'done',        label:'Done',         color:'#00d68f' },
+  ];
+  container.innerHTML = `<div class="kanban">${cols.map(col => {
+    const colTasks = tasks.filter(t => t.status === col.key);
+    return `
+      <div class="kanban-col">
+        <div class="kanban-col-header" style="--c:${col.color}">
+          <span class="kanban-col-title">${col.label}</span>
+          <span class="kanban-count">${colTasks.length}</span>
+        </div>
+        <div class="kanban-tasks">
+          ${colTasks.length === 0
+            ? '<div style="color:var(--text3);font-size:12px;text-align:center;padding:12px">Empty</div>'
+            : colTasks.map(t => `
+                <div class="kanban-task" data-id="${t.id}">
+                  <div class="kanban-task-title">${t.title}</div>
+                  <div class="kanban-task-footer">
+                    ${priorityBadge(t.priority)}
+                    ${t.assignee ? miniAvatar(t.assignee) : '<span style="font-size:11px;color:var(--text3)">—</span>'}
+                  </div>
+                </div>`).join('')}
+        </div>
+      </div>`;
+  }).join('')}</div>`;
+  container.querySelectorAll('.kanban-task').forEach(el => {
+    el.addEventListener('click', () => openTaskDetail(el.dataset.id));
+  });
+}
+
+function renderMembersTab(content, project, members, canManage) {
+  const user = getUser();
+  content.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Team Members</span>
+        ${canManage ? `<button class="btn btn-primary btn-sm" id="add-member-btn">+ Add Member</button>` : ''}
+      </div>
+      <table class="members-table">
+        <thead><tr>
+          <th>Member</th><th>Email</th><th>Project Role</th><th>Joined</th>
+          ${canManage ? '<th>Action</th>' : ''}
+        </tr></thead>
+        <tbody>
+          ${members.map(m => `
+            <tr>
+              <td><div style="display:flex;align-items:center;gap:8px">${avatar(m.user)}<span>${userName(m.user)}</span></div></td>
+              <td style="color:var(--text2)">${m.user.email}</td>
+              <td><span class="badge badge-${m.role}">${m.role}</span></td>
+              <td style="color:var(--text3)">${fmtDate(m.joined_at)}</td>
+              ${canManage ? `<td>
+                ${m.user.id !== user.id
+                  ? `<button class="btn btn-ghost btn-sm remove-member" data-uid="${m.user.id}" style="color:var(--danger)">Remove</button>`
+                  : '<span style="color:var(--text3);font-size:12px">You</span>'}
+              </td>` : ''}
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  if (canManage) {
+    document.getElementById('add-member-btn')?.addEventListener('click', () => showAddMemberModal(project.id, members));
+    content.querySelectorAll('.remove-member').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remove this member?')) return;
+        try {
+          await api.removeMember(project.id, btn.dataset.uid);
+          toast('Member removed', 'success'); openProjectDetail(project.id);
+        } catch(e) { toast(e?.data?.error||'Failed', 'error'); }
+      });
+    });
+  }
+}
+
+function showAddMemberModal(projectId, currentMembers) {
+  const currentIds = new Set(currentMembers.map(m => m.user.id));
+  const available  = allUsers.filter(u => !currentIds.has(u.id));
+  openModal(`
+    <div class="modal">
+      <div class="modal-header"><span class="modal-title">Add Member</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Select User</label>
+          <select class="form-control" id="add-member-user">
+            <option value="">Choose a user…</option>
+            ${available.map(u => `<option value="${u.id}">${userName(u)} (${u.email})</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Project Role</label>
+          <select class="form-control" id="add-member-role">
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="confirm-add-member">Add Member</button>
+      </div>
+    </div>`);
+
+  document.getElementById('confirm-add-member').addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const user_id = document.getElementById('add-member-user').value;
+      const role    = document.getElementById('add-member-role').value;
+      if (!user_id) throw { data:{ error:'Please select a user' } };
+      await api.addMember(projectId, { user_id: parseInt(user_id), role });
+      toast('Member added!', 'success'); closeModal(); openProjectDetail(projectId);
+    });
+  });
+}
+
+function showEditProjectModal(project) {
+  openModal(`
+    <div class="modal">
+      <div class="modal-header"><span class="modal-title">Edit Project</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="form-group"><label>Name</label><input class="form-control" id="ep-name" value="${project.name}"></div>
+        <div class="form-group"><label>Description</label><textarea class="form-control" id="ep-desc">${project.description||''}</textarea></div>
+        <div class="form-group"><label>Status</label>
+          <select class="form-control" id="ep-status">
+            <option value="active"   ${project.status==='active'  ?'selected':''}>Active</option>
+            <option value="archived" ${project.status==='archived'?'selected':''}>Archived</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger"    id="delete-proj-btn">Delete Project</button>
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary"   id="save-proj-btn">Save Changes</button>
+      </div>
+    </div>`);
+
+  document.getElementById('save-proj-btn').addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const d = {
+        name:        document.getElementById('ep-name').value.trim(),
+        description: document.getElementById('ep-desc').value.trim(),
+        status:      document.getElementById('ep-status').value,
+      };
+      if (!d.name) throw { data:{ error:'Name is required' } };
+      await api.updateProject(project.id, d);
+      toast('Project updated!', 'success'); closeModal(); openProjectDetail(project.id);
+    });
+  });
+  document.getElementById('delete-proj-btn').addEventListener('click', async function() {
+    if (!confirm('Delete this project and ALL its tasks? This cannot be undone.')) return;
+    await withLoading(this, async () => {
+      await api.deleteProject(project.id);
+      toast('Project deleted', 'success'); closeModal();
+      navigate('projects'); renderProjects();
+    });
+  });
+}
+
+/* ══════════════════════════════════════════════════════════
+   Task Detail Modal — full CRUD
+   Backend: /api/tasks/{id}/  /api/tasks/{id}/comment/  /api/tasks/{id}/status/
+══════════════════════════════════════════════════════════ */
+async function openTaskDetail(taskId) {
+  openModal(`<div class="modal modal-lg" style="min-height:300px">${loadingEl()}</div>`);
+  try {
+    const t = await api.task(taskId);   // TaskDetailSerializer (with comments)
+    renderTaskDetailModal(t);
+  } catch(e) {
+    const m = document.querySelector('#active-modal .modal');
+    if (m) m.innerHTML = `<div class="modal-body">${emptyState('⚠️','Failed to load task', e?.data?.detail||'')}</div>`;
+  }
+}
+
+function renderTaskDetailModal(t) {
+  const user     = getUser();
+  // A user can edit if: system admin, project admin membership (t doesn't carry this info easily),
+  // or they are the assignee / creator — backend enforces final check.
+  const canEdit  = isAdmin() || t.creator?.id === user.id || t.assignee?.id === user.id;
+
+  const m = document.querySelector('#active-modal .modal');
+  if (!m) return;
+
+  m.innerHTML = `
+    <div class="modal-header">
+      <div style="flex:1;min-width:0">
+        <div class="modal-title" style="margin-bottom:4px">${t.title}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${statusBadge(t.status)} ${priorityBadge(t.priority)}
+          ${isOverdue(t) ? '<span class="overdue-tag">Overdue</span>' : ''}
+        </div>
+      </div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="task-detail-grid">
+
+        <!-- LEFT: description + comments -->
+        <div>
+          <div style="margin-bottom:20px">
+            <div class="task-meta-label" style="margin-bottom:8px">Description</div>
+            <div style="font-size:13.5px;color:var(--text2);line-height:1.7;white-space:pre-wrap">${t.description || '<span style="color:var(--text3)">No description provided.</span>'}</div>
+          </div>
+          <hr class="divider">
+          <div class="comments-section">
+            <div class="task-meta-label" style="margin-bottom:12px">Comments (${(t.comments||[]).length})</div>
+            <div class="comment-list" id="td-comments">
+              ${(t.comments||[]).length === 0
+                ? '<div style="color:var(--text3);font-size:13px">No comments yet.</div>'
+                : (t.comments||[]).map(c => commentHtml(c)).join('')}
+            </div>
+            <div class="comment-input-row" style="margin-top:12px">
+              <input id="td-comment-input" class="form-control" placeholder="Add a comment…" style="flex:1" />
+              <button id="td-comment-btn" class="btn btn-primary btn-sm">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: meta sidebar -->
+        <div>
+          <div class="task-meta-block">
+            <!-- Status: editable if canEdit -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Status</div>
+              ${canEdit ? `
+                <select class="filter-select" id="td-status" style="width:100%;margin-top:4px">
+                  <option value="todo"        ${t.status==='todo'       ?'selected':''}>To Do</option>
+                  <option value="in_progress" ${t.status==='in_progress'?'selected':''}>In Progress</option>
+                  <option value="review"      ${t.status==='review'     ?'selected':''}>Review</option>
+                  <option value="done"        ${t.status==='done'       ?'selected':''}>Done</option>
+                </select>` : `<div class="task-meta-value" style="margin-top:4px">${statusBadge(t.status)}</div>`}
+            </div>
+
+            <!-- Priority -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Priority</div>
+              ${canEdit ? `
+                <select class="filter-select" id="td-priority" style="width:100%;margin-top:4px">
+                  <option value="low"    ${t.priority==='low'   ?'selected':''}>Low</option>
+                  <option value="medium" ${t.priority==='medium'?'selected':''}>Medium</option>
+                  <option value="high"   ${t.priority==='high'  ?'selected':''}>High</option>
+                  <option value="urgent" ${t.priority==='urgent'?'selected':''}>Urgent</option>
+                </select>` : `<div class="task-meta-value" style="margin-top:4px">${priorityBadge(t.priority)}</div>`}
+            </div>
+
+            <!-- Assignee -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Assignee</div>
+              ${canEdit && allUsers.length > 0 ? `
+                <select class="filter-select" id="td-assignee" style="width:100%;margin-top:4px">
+                  <option value="">Unassigned</option>
+                  ${allUsers.map(u => `<option value="${u.id}" ${t.assignee?.id===u.id?'selected':''}>${userName(u)}</option>`).join('')}
+                </select>` : `
+                <div class="task-meta-value" style="display:flex;align-items:center;gap:6px;margin-top:4px">
+                  ${t.assignee ? `${miniAvatar(t.assignee)}<span>${userName(t.assignee)}</span>` : '<span style="color:var(--text3)">Unassigned</span>'}
+                </div>`}
+            </div>
+
+            <!-- Due Date -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Due Date</div>
+              ${canEdit ? `
+                <input type="date" class="form-control" id="td-due" style="margin-top:4px"
+                  value="${t.due_date||''}" />` : `
+                <div class="task-meta-value" style="margin-top:4px">
+                  ${fmtDate(t.due_date)}
+                  ${isOverdue(t)?'<span class="overdue-tag" style="margin-left:6px">Overdue</span>':''}
+                </div>`}
+            </div>
+
+            <!-- Project -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Project</div>
+              <div class="task-meta-value" style="margin-top:4px">${t.project_name||'—'}</div>
+            </div>
+
+            <!-- Creator -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Created by</div>
+              <div class="task-meta-value" style="display:flex;align-items:center;gap:6px;margin-top:4px">
+                ${t.creator ? `${miniAvatar(t.creator)}<span>${userName(t.creator)}</span>` : '—'}
+              </div>
+            </div>
+
+            <!-- Date -->
+            <div class="task-meta-item">
+              <div class="task-meta-label">Created</div>
+              <div class="task-meta-value" style="margin-top:4px">${fmtDate(t.created_at)}</div>
+            </div>
+          </div>
+
+          ${canEdit ? `
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+              <button class="btn btn-primary btn-sm btn-full" id="td-save-btn">Save Changes</button>
+              <button class="btn btn-danger btn-sm btn-full"  id="td-delete-btn">Delete Task</button>
+            </div>` : ''}
+        </div>
+      </div>
+    </div>`;
+
+  // ── Save changes (status + priority + assignee + due date)
+  document.getElementById('td-save-btn')?.addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const updates = {
+        status:   document.getElementById('td-status')?.value   || t.status,
+        priority: document.getElementById('td-priority')?.value || t.priority,
+      };
+      const assigneeEl = document.getElementById('td-assignee');
+      if (assigneeEl) updates.assignee_id = assigneeEl.value ? parseInt(assigneeEl.value) : null;
+      const dueEl = document.getElementById('td-due');
+      if (dueEl) updates.due_date = dueEl.value || null;
+
+      // Use /status/ endpoint for status change (it's a separate action in backend)
+      if (updates.status !== t.status) await api.updateTaskStatus(t.id, updates.status);
+      // PATCH the rest
+      const { status: _s, ...rest } = updates;
+      await api.updateTask(t.id, rest);
+
+      toast('Task updated!', 'success');
+      closeModal();
+      // Refresh visible page
+      refreshCurrentPage();
+    });
+  });
+
+  // ── Delete
+  document.getElementById('td-delete-btn')?.addEventListener('click', async function() {
+    if (!confirm('Delete this task? This cannot be undone.')) return;
+    await withLoading(this, async () => {
+      await api.deleteTask(t.id);
+      toast('Task deleted', 'success'); closeModal();
+      refreshCurrentPage();
+    });
+  });
+
+  // ── Add comment  POST /api/tasks/{id}/comment/
+  document.getElementById('td-comment-btn')?.addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const input = document.getElementById('td-comment-input');
+      const text  = input.value.trim();
+      if (!text) throw { data:{ error:'Comment cannot be empty' } };
+      // Backend returns the single new comment (TaskCommentSerializer)
+      const newComment = await api.addComment(t.id, text);
+      input.value = '';
+      // Append to list
+      const list = document.getElementById('td-comments');
+      if (list) {
+        // If "No comments yet" placeholder, replace it
+        if (list.querySelector('div:not(.comment-item)')) list.innerHTML = '';
+        list.insertAdjacentHTML('beforeend', commentHtml(newComment));
+      }
+      toast('Comment added', 'success');
+    });
+  });
+}
+
+function commentHtml(c) {
+  return `
+    <div class="comment-item">
+      ${miniAvatar(c.user)}
+      <div class="comment-body">
+        <div class="comment-user">${userName(c.user)}</div>
+        <div class="comment-text">${c.comment}</div>
+        <div class="comment-time">${timeAgo(c.created_at)}</div>
+      </div>
+    </div>`;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Create Task Modal  POST /api/tasks/
+══════════════════════════════════════════════════════════ */
+function showCreateTaskModal(projectId) {
+  openModal(`
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">New Task</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Title *</label>
+          <input class="form-control" id="ct-title" placeholder="e.g. Design homepage mockup" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea class="form-control" id="ct-desc" placeholder="Optional details…"></textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Priority</label>
+            <select class="form-control" id="ct-priority">
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="high">High</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Status</label>
+            <select class="form-control" id="ct-status">
+              <option value="todo">To Do</option>
+              <option value="in_progress">In Progress</option>
+              <option value="review">Review</option>
+              <option value="done">Done</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Assignee</label>
+            <select class="form-control" id="ct-assignee">
+              <option value="">Unassigned</option>
+              ${allUsers.map(u => `<option value="${u.id}">${userName(u)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Due Date</label>
+            <input class="form-control" id="ct-due" type="date" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary"   id="create-task-btn">Create Task</button>
+      </div>
+    </div>`);
+
+  document.getElementById('create-task-btn').addEventListener('click', async function() {
+    await withLoading(this, async () => {
+      const title = document.getElementById('ct-title').value.trim();
+      if (!title) throw { data:{ error:'Title is required' } };
+      const body = {
+        project:     projectId,
+        title,
+        description: document.getElementById('ct-desc').value.trim(),
+        priority:    document.getElementById('ct-priority').value,
+        status:      document.getElementById('ct-status').value,
+      };
+      const assignee = document.getElementById('ct-assignee').value;
+      if (assignee) body.assignee_id = parseInt(assignee);
+      const due = document.getElementById('ct-due').value;
+      if (due) body.due_date = due;
+
+      await api.createTask(body);
+      toast('Task created!', 'success');
+      closeModal();
+      openProjectDetail(projectId);
+    });
+  });
+}
+
+/* ══════════════════════════════════════════════════════════
+   My Tasks Page  GET /api/tasks/?assignee=me
+══════════════════════════════════════════════════════════ */
+async function renderMyTasks() {
+  const page = document.getElementById('page-my-tasks');
+  page.innerHTML = loadingEl();
+  try {
+    const res   = await api.tasks('?assignee=me');
+    const tasks = Array.isArray(res) ? res : (res.results || Object.values(res).find(v => Array.isArray(v)) || []);
+
+    const open = tasks.filter(t => t.status !== 'done');
+    const done = tasks.filter(t => t.status === 'done');
+
+    updateMyTasksBadge(open.length);
+
+    page.innerHTML = `
+      <div style="margin-bottom:24px">
+        <h2 style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;margin-bottom:4px">👤 My Tasks</h2>
+        <p style="color:var(--text2);font-size:13px">${open.length} open · ${done.length} completed</p>
+      </div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+          <span class="card-title">Open</span>
+          <span class="badge badge-todo">${open.length}</span>
+        </div>
+        ${open.length === 0
+          ? emptyState('👌','No open tasks','You\'re all caught up!')
+          : `<div class="task-list">${open.map(t => taskItemHtml(t, true)).join('')}</div>`}
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Completed</span>
+          <span class="badge badge-done">${done.length}</span>
+        </div>
+        ${done.length === 0
+          ? emptyState('📭','Nothing completed yet','')
+          : `<div class="task-list">${done.map(t => taskItemHtml(t, true)).join('')}</div>`}
+      </div>`;
+
+    page.querySelectorAll('.task-item[data-id]').forEach(el => {
+      el.addEventListener('click', () => openTaskDetail(el.dataset.id));
+    });
+  } catch(e) {
+    page.innerHTML = emptyState('⚠️','Failed to load tasks', e?.data?.detail||'Try refreshing');
+  }
+}
+
+/* ══════════════════════════════════════════════════════════
+   Team Page (admin only)  GET /api/auth/users/
+══════════════════════════════════════════════════════════ */
+async function renderTeam() {
+  const page = document.getElementById('page-team');
+  page.innerHTML = loadingEl();
+  try {
+    const res   = await api.users();
+    const users = res.users || res || [];
+    page.innerHTML = `
+      <div style="margin-bottom:24px">
+        <h2 style="font-family:'Syne',sans-serif;font-size:20px;font-weight:800;margin-bottom:4px">👥 Team Members</h2>
+        <p style="color:var(--text2);font-size:13px">${users.length} member${users.length!==1?'s':''} total</p>
+      </div>
+      <div class="card">
+        <table class="members-table">
+          <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Joined</th></tr></thead>
+          <tbody>
+            ${users.map(u => `
+              <tr>
+                <td><div style="display:flex;align-items:center;gap:8px">
+                  ${avatar(u)}
+                  <div>
+                    <div style="font-weight:500">${userName(u)}</div>
+                  </div>
+                </div></td>
+                <td style="color:var(--text2)">${u.email}</td>
+                <td><span class="badge badge-${u.role}">${u.role}</span></td>
+                <td style="color:var(--text3)">${fmtDate(u.date_joined)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    page.innerHTML = emptyState('⚠️','Failed to load team', e?.data?.detail||'');
+  }
+}
+
+/* ══════════════════════════════════════════════════════════
+   Helpers
+══════════════════════════════════════════════════════════ */
+function refreshCurrentPage() {
+  const visible = ['dashboard','projects','project-detail','my-tasks','team']
+    .find(p => !document.getElementById(`page-${p}`)?.classList.contains('page-hidden'));
+  if (visible === 'dashboard')      renderDashboard();
+  else if (visible === 'projects')  renderProjects();
+  else if (visible === 'project-detail' && currentProject) openProjectDetail(currentProject.id);
+  else if (visible === 'my-tasks')  renderMyTasks();
+  else if (visible === 'team')      renderTeam();
+}
+
+/* ══════════════════════════════════════════════════════════
+   APP BOOT
+══════════════════════════════════════════════════════════ */
+function launchApp() {
+  document.getElementById('auth').style.display = 'none';
+  document.getElementById('app').style.display  = 'block';
+
+  updateSidebarUser();
+
+  // Wire nav items
+  document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const page = btn.dataset.page;
+      navigate(page);
+      if      (page === 'dashboard') renderDashboard();
+      else if (page === 'projects')  renderProjects();
+      else if (page === 'my-tasks')  renderMyTasks();
+      else if (page === 'team')      renderTeam();
+    });
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', logout);
+
+  navigate('dashboard');
+  renderDashboard();
+  // preload badge
+  api.tasks('?assignee=me').then(res => {
+    const tasks = Array.isArray(res) ? res : (res.results || []);
+    updateMyTasksBadge(tasks.filter(t => t.status !== 'done').length);
+  }).catch(() => {});
+}
+
+async function boot() {
+  initAuth();
+  const ok = await checkAuth();
+  if (ok) launchApp();
+  else    renderAuthPage();
+}
+
+boot();
+</script>
+</body>
+</html>
