@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: django-backend
+    env: python
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn Team_Task_Manager.wsgi:application"
+    envVars:
+      - key: DEBUG
+        value: False
